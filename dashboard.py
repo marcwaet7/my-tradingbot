@@ -1,3 +1,28 @@
+import streamlit as st
+import subprocess
+import os
+
+# Waterdichte achtergrund-starter via een lock-bestand
+LOCK_FILE = "bot.lock"
+
+if "bot_gestart" not in st.session_state:
+    # Als de server herstart, wissen we een eventueel oud lock-bestand
+    if os.path.exists(LOCK_FILE):
+        try: os.remove(LOCK_FILE)
+        except: pass
+        
+    try:
+        # Start de bot live op de achtergrond
+        subprocess.Popen(["python3", "-u", "tradingbot.py"])
+        st.session_state["bot_gestart"] = True
+        
+        # Maak het lock-bestand aan zodat we weten dat hij draait
+        with open(LOCK_FILE, "w") as f:
+            f.write("running")
+            
+        st.toast("🚀 Tradingbot succesvol geactiveerd op de achtergrond!")
+    except Exception as e:
+        st.error(f"⚠️ Kon achtergrondbot niet starten: {e}")
 
 import streamlit as st
 import subprocess
