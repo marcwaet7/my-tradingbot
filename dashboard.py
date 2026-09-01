@@ -1,4 +1,20 @@
 import streamlit as st
+import streamlit as st
+import subprocess
+import os
+
+# Automatische achtergrond-starter voor de tradingbot in de cloud
+if "bot_gestart" not in st.session_state:
+    try:
+        # Dit start tradingbot.py onzichtbaar op de achtergrond van de cloud-server
+        subprocess.Popen(["python3", "-u", "tradingbot.py"])
+        st.session_state["bot_gestart"] = True
+        st.toast("🚀 Tradingbot succesvol geactiveerd op de achtergrond!")
+    except Exception as e:
+        st.error(f"⚠️ Kon achtergrondbot niet starten: {e}")
+
+# ... HIERONDER STAAT JOUW OUDE DASHBOARD CODE ...
+
 import pandas as pd
 import os
 import yfinance as yf
