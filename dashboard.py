@@ -117,7 +117,10 @@ for ticker in laad_universe():
 # 4. VISUEEL DASHBOARD & WINSTMETER
 # =====================================================================
 st.title("📈 Live RSI + MACD Trading Dashboard")
-st.write(f"Laatste scan succesvol afgerond om: {datetime.datetime.now().strftime('%H:%M:%S')}")
+# Bereken de Belgische tijd (Cloud tijd + 2 uur zomertijd)
+belgische_tijd = datetime.datetime.now() + datetime.timedelta(hours=2)
+st.write(f"Laatste scan succesvol afgerond om: {belgische_tijd.strftime('%H:%M:%S')}")
+
 
 st.header("📊 Real-time Winstmeter (PnL)")
 col1, col2 = st.columns(2)
