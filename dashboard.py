@@ -4,10 +4,11 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 # =====================================================================
-# 1. CLOUD CONFIGURATIE & SECRETS
+# 1. CLOUD CONFIGURATIE & BESTANDEN
 # =====================================================================
 COOLDOWN_PERIOD = datetime.timedelta(minutes=15)
 COOLDOWN_FILE = "cooldown_register.json"
+TRANSACTIE_FILE = "transacties.json"
 
 EMAIL_ZENDER = st.secrets.get("EMAIL_ZENDER", "")
 EMAIL_WACHTWOORD = st.secrets.get("EMAIL_WACHTWOORD", "")
@@ -16,7 +17,6 @@ EMAIL_ONTVANGER = st.secrets.get("EMAIL_ONTVANGER", "")
 custom_session = requests.Session()
 custom_session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
 
-# HARDCODED START-TRADES DIE ALTIJD BLIJVEN STAAN VOOR HET DASHBOARD
 if "portfolio" not in st.session_state or len(st.session_state["portfolio"]) == 0:
     st.session_state["portfolio"] = [
         {"ticker": "AAPL", "direction": "LONG", "entry_price": 175.50, "stop_loss": 170.00, "take_profit": 230.00, "shares": 14},
@@ -24,8 +24,26 @@ if "portfolio" not in st.session_state or len(st.session_state["portfolio"]) == 
     ]
 
 # =====================================================================
-# 2. HULPFUNCTIES
+# 2. HULPFUNCTIES & HISTORIE
 # =====================================================================
+def laad_transacties():
+    if not os.path.exists(TRANSACTIE_FILE): return []
+    try:
+        with open(TRANSACTIE_FILE, "r") as f: return json.load(f)
+    except Exception: return []
+
+def sla_transactie_op(tijdstip, ticker, richting, pnl):
+    historie = laad_transacties()
+    historie.append({
+        "Tijdstip (BE)": tijdstip,
+        "Ticker": ticker.upper(),
+        "Richting": richting,
+        "Resultaat (PnL)": f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
+    })
+    try:
+        with open(TRANSACTIE_FILE, "w") as f: json.dump(historie, f, indent=4)
+    except Exception: pass
+
 def laad_cooldown_register():
     if not os.path.exists(COOLDOWN_FILE): return {}
     try:
@@ -53,8 +71,8 @@ def mag_nieuwe_positie_openen(ticker, portfolio, reg):
 reg = laad_cooldown_register()
 totaal_pnl = 0.0
 overblijvers = []
+belgische_tijd_str = (datetime.datetime.now() + datetime.timedelta(hours=2)).strftime('%Y-%m-%d %H:%M:%S')
 
-# Real-time portfolio controle en live PnL berekening
 for p in st.session_state["portfolio"]:
     try:
         df = yf.Ticker(p["ticker"], session=custom_session).history(period="1d", interval="1m")
@@ -63,11 +81,12 @@ for p in st.session_state["portfolio"]:
             pnl = (px - p["entry_price"]) * p["shares"]
             totaal_pnl += pnl
             
-            # Controleer of SL of TP is geraakt
             if px <= p["stop_loss"] or px >= p["take_profit"]:
                 reg[p["ticker"].upper()] = datetime.datetime.now() + COOLDOWN_PERIOD
                 sla_cooldown_register_op(reg)
-                continue # Verwijder uit portfolio
+                # Sla de trade permanent op in het dagelijkse logboek
+                sla_transactie_op(belgische_tijd_str, p["ticker"], p["direction"], pnl)
+                continue
         overblijvers.append(p)
     except Exception:
         overblijvers.append(p)
@@ -77,7 +96,6 @@ st.session_state["portfolio"] = overblijvers
 # =====================================================================
 # 4. VISUEEL DASHBOARD & LAY-OUT
 # =====================================================================
-# Bereken de Belgische tijdzone (Cloud tijd + 2 uur zomertijd)
 belgische_tijd = datetime.datetime.now() + datetime.timedelta(hours=2)
 
 st.title("📈 Live RSI + MACD Trading Dashboard")
@@ -97,12 +115,22 @@ st.markdown("---")
 st.subheader("💼 Actieve Portfolio")
 
 if len(st.session_state["portfolio"]) > 0:
-    # Maak er een mooie, leesbare tabel van voor je telefoon
     df_visueel = pd.DataFrame(st.session_state["portfolio"])
     st.dataframe(df_visueel[['ticker', 'direction', 'entry_price', 'stop_loss', 'take_profit', 'shares']])
 else:
-    st.info("Wacht op actieve trades van de 5m Scalper... De pagina ververst live.")
+    st.info("Wacht op actieve trades van de 5m Scalper...")
 
-# Automatische pagina-refresh elke 30 seconden
+# --- DE NIEUWE DIENST: GESLOTEN TRANSACTIES LOGBOEK ---
+st.markdown("---")
+st.subheader("📜 Gesloten Transacties (Dagelijkse Trades)")
+gesloten_lijst = laad_transacties()
+
+if len(gesloten_lijst) > 0:
+    df_gesloten = pd.DataFrame(gesloten_lijst)
+    # Toon de nieuwste transacties altijd bovenaan
+    st.dataframe(df_gesloten.iloc[::-1])
+else:
+    st.info("Net gestart. Gesloten trades verschijnen hier automatisch zodra ze hun SL of TP raken.")
+
 time.sleep(30)
 st.rerun()
