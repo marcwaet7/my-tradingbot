@@ -4,12 +4,18 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 # =====================================================================
-# 1. CLOUD CONFIGURATIE & SECRETS (MET VEILIGE FALLBACK)
+# 1. INITIALISEER HET GEHEUGEN DIRECT (VOORKOM KEYERROR)
+# =====================================================================
+if "portfolio" not in st.session_state:
+    st.session_state["portfolio"] = []
+
+# =====================================================================
+# 2. CLOUD CONFIGURATIE & SECRETS
 # =====================================================================
 COOLDOWN_PERIOD = datetime.timedelta(minutes=15)
 COOLDOWN_FILE = "cooldown_register.json"
+TRANSACTIE_FILE = "transacties.json"
 
-# Probeer eerst de Streamlit Cloud Secrets te laden, anders laden we lokaal via .env
 try:
     EMAIL_ZENDER = st.secrets.get("EMAIL_ZENDER", os.getenv("EMAIL_ZENDER", ""))
     EMAIL_WACHTWOORD = st.secrets.get("EMAIL_WACHTWOORD", os.getenv("EMAIL_WACHTWOORD", ""))
@@ -21,9 +27,11 @@ except Exception:
     EMAIL_WACHTWOORD = os.getenv("EMAIL_WACHTWOORD", "")
     EMAIL_ONTVANGER = os.getenv("EMAIL_ONTVANGER", "")
 
+custom_session = requests.Session()
+custom_session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
 
 # =====================================================================
-# 2. HULPFUNCTIES & HISTORIE
+# 3. HULPFUNCTIES & HISTORIE
 # =====================================================================
 def laad_transacties():
     if not os.path.exists(TRANSACTIE_FILE): return []
@@ -64,14 +72,32 @@ def mag_nieuwe_positie_openen(ticker, portfolio, reg):
     if ticker.upper() in reg and datetime.datetime.now() < reg[ticker.upper()]: return False
     return True
 
+def bereken_atr_limieten(data):
+    h, l, cp = data['High'], data['Low'], data['Close'].shift(1)
+    tr = (h - l).combine((h - cp).abs(), max).combine((l - cp).abs(), max)
+    atr = tr.rolling(window=14).mean().iloc[-1]
+    px = float(data['Close'].iloc[-1])
+    return round(px, 2), round(px - (atr * 1.5), 2), round(px + (atr * 3.0), 2)
+
+def bereken_rsi(series):
+    delta = series.diff()
+    g = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    l = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    return 100 - (100 / (1 + (g / l)))
+
+def bereken_macd(series):
+    macd = series.ewm(span=12, adjust=False).mean() - series.ewm(span=26, adjust=False).mean()
+    return macd, macd.ewm(span=9, adjust=False).mean()
+
 # =====================================================================
-# 3. LIVE SCANNER EN TRANS-ACTIE LOOP
+# 4. LIVE SCANNER EN TRANS-ACTIE LOOP
 # =====================================================================
 reg = laad_cooldown_register()
 totaal_pnl = 0.0
 overblijvers = []
 belgische_tijd_str = (datetime.datetime.now() + datetime.timedelta(hours=2)).strftime('%Y-%m-%d %H:%M:%S')
 
+# Bereken live PnL voor eventuele openstaande posities
 for p in st.session_state["portfolio"]:
     try:
         df = yf.Ticker(p["ticker"], session=custom_session).history(period="1d", interval="1m")
@@ -83,7 +109,6 @@ for p in st.session_state["portfolio"]:
             if px <= p["stop_loss"] or px >= p["take_profit"]:
                 reg[p["ticker"].upper()] = datetime.datetime.now() + COOLDOWN_PERIOD
                 sla_cooldown_register_op(reg)
-                # Sla de trade permanent op in het dagelijkse logboek
                 sla_transactie_op(belgische_tijd_str, p["ticker"], p["direction"], pnl)
                 continue
         overblijvers.append(p)
@@ -92,8 +117,24 @@ for p in st.session_state["portfolio"]:
 
 st.session_state["portfolio"] = overblijvers
 
+# MAP SCANNER (5M INTERVALLEN)
+for ticker in laad_universe():
+    try:
+        if not mag_nieuwe_positie_openen(ticker, st.session_state["portfolio"], reg): continue
+        df = yf.Ticker(ticker, session=custom_session).history(period="1d", interval="5m")
+        if len(df) < 35: continue
+        
+        df['RSI'] = bereken_rsi(df['Close'])
+        macd, sig = bereken_macd(df['Close'])
+        
+        # Strenge RSI < 45 + MACD Crossover Filter
+        if df['RSI'].iloc[-1] < 45 and macd.iloc[-2] <= sig.iloc[-2] and macd.iloc[-1] > sig.iloc[-1]:
+            px, sl, tp = bereken_atr_limieten(df)
+            st.session_state["portfolio"].append({"ticker": ticker, "direction": "LONG", "entry_price": px, "stop_loss": sl, "take_profit": tp, "shares": 14})
+    except Exception: pass
+
 # =====================================================================
-# 4. VISUEEL DASHBOARD & LAY-OUT
+# 5. VISUEEL DASHBOARD & LAY-OUT
 # =====================================================================
 belgische_tijd = datetime.datetime.now() + datetime.timedelta(hours=2)
 
@@ -117,20 +158,17 @@ if len(st.session_state["portfolio"]) > 0:
     df_visueel = pd.DataFrame(st.session_state["portfolio"])
     st.dataframe(df_visueel[['ticker', 'direction', 'entry_price', 'stop_loss', 'take_profit', 'shares']])
 else:
-    st.info("Wacht op actieve trades van de 5m Scalper...")
+    st.info("Wacht op actieve trades van de 5m Scalper... Het scherm ververst live.")
 
-# --- DE NIEUWE DIENST: GESLOTEN TRANSACTIES LOGBOEK ---
 st.markdown("---")
 st.subheader("📜 Gesloten Transacties (Dagelijkse Trades)")
 gesloten_lijst = laad_transacties()
 
 if len(gesloten_lijst) > 0:
-    df_gesloten = pd.DataFrame(gesloten_lijst)
-    # Toon de nieuwste transacties altijd bovenaan
-    st.dataframe(df_gesloten.iloc[::-1])
+    st.dataframe(pd.DataFrame(gesloten_lijst).iloc[::-1])
 else:
     st.info("Net gestart. Gesloten trades verschijnen hier automatisch zodra ze hun SL of TP raken.")
+
+# Automatische onzichtbare verversing elke 30 seconden via de gsm-vriendelijke timer
 from streamlit_autorefresh import st_autorefresh
 st_autorefresh(interval=30000, key="bot_refresh")
-
-
