@@ -9,7 +9,6 @@ from email.mime.multipart import MIMEMultipart
 COOLDOWN_PERIOD = datetime.timedelta(minutes=15)
 COOLDOWN_FILE = "cooldown_register.json"
 
-# Haal de geheime e-mailgegevens veilig op uit de Streamlit Secrets
 EMAIL_ZENDER = st.secrets.get("EMAIL_ZENDER", "")
 EMAIL_WACHTWOORD = st.secrets.get("EMAIL_WACHTWOORD", "")
 EMAIL_ONTVANGER = st.secrets.get("EMAIL_ONTVANGER", "")
@@ -17,9 +16,12 @@ EMAIL_ONTVANGER = st.secrets.get("EMAIL_ONTVANGER", "")
 custom_session = requests.Session()
 custom_session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
 
-# INITIALISEER HET PORTFOLIO IN HET GEHEUGEN VAN DE CLOUD
-if "portfolio" not in st.session_state:
-    st.session_state["portfolio"] = []
+# GEGARANDEERDE START-TRADES VOOR DE TESTFASE
+if "portfolio" not in st.session_state or len(st.session_state["portfolio"]) == 0:
+    st.session_state["portfolio"] = [
+        {"ticker": "AAPL", "direction": "LONG", "entry_price": 175.50, "stop_loss": 170.00, "take_profit": 190.00, "shares": 14},
+        {"ticker": "TSLA", "direction": "LONG", "entry_price": 240.20, "stop_loss": 230.00, "take_profit": 265.00, "shares": 14}
+    ]
 
 # =====================================================================
 # 2. REKENKERNEN & RECHTEN
@@ -77,17 +79,21 @@ def bereken_macd(series):
     return macd, macd.ewm(span=9, adjust=False).mean()
 
 # =====================================================================
-# 3. LIVE SCANNER EN TRANS-ACTIE LOOP
+# 3. LIVE SCANNER LOOP
 # =====================================================================
 reg = laad_cooldown_register()
+totaal_pnl = 0.0
 
-# Real-time portfolio controle van openstaande trades
+# Real-time portfolio controle en live PnL berekening
 overblijvers = []
 for p in st.session_state["portfolio"]:
     try:
         df = yf.Ticker(p["ticker"], session=custom_session).history(period="1d", interval="1m")
         if not df.empty:
             px = float(df["Close"].iloc[-1])
+            pnl = (px - p["entry_price"]) * p["shares"]
+            totaal_pnl += pnl
+            
             if px <= p["stop_loss"] or px >= p["take_profit"]:
                 reg[p["ticker"].upper()] = datetime.datetime.now() + COOLDOWN_PERIOD
                 sla_cooldown_register_op(reg)
@@ -96,7 +102,7 @@ for p in st.session_state["portfolio"]:
     except Exception: overblijvers.append(p)
 st.session_state["portfolio"] = overblijvers
 
-# SCANNEN VAN DE MARKT (5M INTERVALLEN)
+# MAP SCANNER (5M INTERVALLEN)
 for ticker in laad_universe():
     try:
         if not mag_nieuwe_positie_openen(ticker, st.session_state["portfolio"], reg): continue
@@ -106,28 +112,30 @@ for ticker in laad_universe():
         df['RSI'] = bereken_rsi(df['Close'])
         macd, sig = bereken_macd(df['Close'])
         
-        # Agressievere RSI grens (< 45) + MACD Crossover Check
         if df['RSI'].iloc[-1] < 45 and macd.iloc[-2] <= sig.iloc[-2] and macd.iloc[-1] > sig.iloc[-1]:
             px, sl, tp = bereken_atr_limieten(df)
-            st.session_state["portfolio"].append({"ticker": ticker, "entry_price": px, "stop_loss": sl, "take_profit": tp, "shares": 14})
-            stur_trade_email(ticker, px, sl, tp)
+            st.session_state["portfolio"].append({"ticker": ticker, "direction": "LONG", "entry_price": px, "stop_loss": sl, "take_profit": tp, "shares": 14})
+            stuur_trade_email(ticker, px, sl, tp)
     except Exception: pass
 
 # =====================================================================
 # 4. VISUEEL DASHBOARD & WINSTMETER
 # =====================================================================
-st.title("📈 Live RSI + MACD Trading Dashboard")
-# Bereken de Belgische tijd (Cloud tijd + 2 uur zomertijd)
+# Bereken de Belgische tijdzone (Cloud tijd + 2 uur)
 belgische_tijd = datetime.datetime.now() + datetime.timedelta(hours=2)
-st.write(f"Laatste scan succesvol afgerond om: {belgische_tijd.strftime('%H:%M:%S')}")
 
+st.title("📈 Live RSI + MACD Trading Dashboard")
+st.write(f"Laatste scan succesvol afgerond om: {belgische_tijd.strftime('%H:%M:%S')}")
 
 st.header("📊 Real-time Winstmeter (PnL)")
 col1, col2 = st.columns(2)
 with col1:
     st.metric(label="Aantal Actieve Posities", value=f"{len(st.session_state['portfolio'])} trades")
 with col2:
-    st.metric(label="Totale Gerealiseerde PnL", value="$0.00", delta="Winst")
+    if totaal_pnl >= 0:
+        st.metric(label="Totale Live PnL", value=f"+${totaal_pnl:.2f}", delta="Winst")
+    else:
+        st.metric(label="Totale Live PnL", value=f"-${abs(totaal_pnl):.2f}", delta="Verlies", delta_color="inverse")
 
 st.markdown("---")
 st.subheader("💼 Actieve Portfolio")
@@ -137,6 +145,5 @@ if len(st.session_state["portfolio"]) > 0:
 else:
     st.info("Wacht op actieve trades van de 5m Scalper... De pagina ververst live.")
 
-# Automatische pagina-refresh elke 30 seconden om de bot scherp te houden
 time.sleep(30)
 st.rerun()
