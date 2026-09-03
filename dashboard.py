@@ -131,6 +131,7 @@ if len(gesloten_lijst) > 0:
     st.dataframe(df_gesloten.iloc[::-1])
 else:
     st.info("Net gestart. Gesloten trades verschijnen hier automatisch zodra ze hun SL of TP raken.")
+from streamlit_autorefresh import st_autorefresh
+st_autorefresh(interval=30000, key="bot_refresh")
 
-time.sleep(30)
-st.rerun()
+
