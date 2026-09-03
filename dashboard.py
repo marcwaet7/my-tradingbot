@@ -4,24 +4,23 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 # =====================================================================
-# 1. CLOUD CONFIGURATIE & BESTANDEN
+# 1. CLOUD CONFIGURATIE & SECRETS (MET VEILIGE FALLBACK)
 # =====================================================================
 COOLDOWN_PERIOD = datetime.timedelta(minutes=15)
 COOLDOWN_FILE = "cooldown_register.json"
-TRANSACTIE_FILE = "transacties.json"
 
-EMAIL_ZENDER = st.secrets.get("EMAIL_ZENDER", "")
-EMAIL_WACHTWOORD = st.secrets.get("EMAIL_WACHTWOORD", "")
-EMAIL_ONTVANGER = st.secrets.get("EMAIL_ONTVANGER", "")
+# Probeer eerst de Streamlit Cloud Secrets te laden, anders laden we lokaal via .env
+try:
+    EMAIL_ZENDER = st.secrets.get("EMAIL_ZENDER", os.getenv("EMAIL_ZENDER", ""))
+    EMAIL_WACHTWOORD = st.secrets.get("EMAIL_WACHTWOORD", os.getenv("EMAIL_WACHTWOORD", ""))
+    EMAIL_ONTVANGER = st.secrets.get("EMAIL_ONTVANGER", os.getenv("EMAIL_ONTVANGER", ""))
+except Exception:
+    from dotenv import load_dotenv
+    load_dotenv()
+    EMAIL_ZENDER = os.getenv("EMAIL_ZENDER", "")
+    EMAIL_WACHTWOORD = os.getenv("EMAIL_WACHTWOORD", "")
+    EMAIL_ONTVANGER = os.getenv("EMAIL_ONTVANGER", "")
 
-custom_session = requests.Session()
-custom_session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
-
-if "portfolio" not in st.session_state or len(st.session_state["portfolio"]) == 0:
-    st.session_state["portfolio"] = [
-        {"ticker": "AAPL", "direction": "LONG", "entry_price": 175.50, "stop_loss": 170.00, "take_profit": 230.00, "shares": 14},
-        {"ticker": "TSLA", "direction": "LONG", "entry_price": 240.20, "stop_loss": 210.00, "take_profit": 310.00, "shares": 14}
-    ]
 
 # =====================================================================
 # 2. HULPFUNCTIES & HISTORIE
